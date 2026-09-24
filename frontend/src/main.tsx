@@ -1,9 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-
-function App() {
-  return <div>Nerdearla Live Subtitles</div>;
-}
+import App from "./App";
+import "./index.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
