@@ -39,6 +39,14 @@ class Settings(BaseSettings):
     default_source_language: str = "es-ES"
     default_translation_language: str = "es"
 
+    # Authentication configuration (stateless single-operator)
+    auth_username: str = "admin"
+    auth_password_hash: str = ""
+    auth_jwt_secret: str = ""
+    auth_jwt_expires_seconds: int = 28800
+    auth_rate_limit_attempts: int = 5
+    auth_rate_limit_window_seconds: int = 300
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
