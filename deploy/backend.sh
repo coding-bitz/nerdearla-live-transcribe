@@ -33,6 +33,7 @@ gcloud services enable \
   run.googleapis.com \
   aiplatform.googleapis.com \
   artifactregistry.googleapis.com \
+  secretmanager.googleapis.com \
   --project "${PROJECT_ID}"
 
 # 5. Service Account Setup
@@ -51,6 +52,23 @@ gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
   --condition=None \
   --quiet > /dev/null
 
+echo "Ensuring Secret Manager accessor role (roles/secretmanager.secretAccessor) is granted..."
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+  --member="serviceAccount:${SA_EMAIL}" \
+  --role="roles/secretmanager.secretAccessor" \
+  --condition=None \
+  --quiet > /dev/null
+
+# Prepare Secret Manager parameters if secrets are provisioned
+SECRETS_FLAG=""
+if gcloud secrets describe nerdearla-auth-password-hash --project "${PROJECT_ID}" &>/dev/null && \
+   gcloud secrets describe nerdearla-auth-jwt-secret --project "${PROJECT_ID}" &>/dev/null; then
+  echo "Binding Secret Manager secrets to Cloud Run service..."
+  SECRETS_FLAG="--set-secrets=AUTH_PASSWORD_HASH=nerdearla-auth-password-hash:latest,AUTH_JWT_SECRET=nerdearla-auth-jwt-secret:latest"
+else
+  echo "Notice: Auth secrets not found in Secret Manager. They will use environment variables."
+fi
+
 # 6. Deploy to Cloud Run
 echo "Deploying ${SERVICE_NAME} to Cloud Run in ${REGION}..."
 gcloud run deploy "${SERVICE_NAME}" \
@@ -65,7 +83,8 @@ gcloud run deploy "${SERVICE_NAME}" \
   --max-instances 10 \
   --session-affinity \
   --allow-unauthenticated \
-  --set-env-vars "GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=global,ENVIRONMENT=production" \
+  --set-env-vars "GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=global,ENVIRONMENT=production,AUTH_USERNAME=${AUTH_USERNAME:-admin}" \
+  ${SECRETS_FLAG} \
   --project "${PROJECT_ID}"
 
 # 7. Retrieve Service URL and verify Health Check
