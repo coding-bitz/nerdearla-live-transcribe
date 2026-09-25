@@ -1,11 +1,12 @@
 import React from "react";
+import { WsConnectionStatus } from "../hooks/useWebSocket";
 
 interface AudioCaptureProps {
   sessionId: string;
   setSessionId: (id: string) => void;
   sourceLanguage: string;
   setSourceLanguage: (lang: string) => void;
-  isConnected: boolean;
+  connectionStatus: WsConnectionStatus;
   isReady: boolean;
   isRecording: boolean;
   volume: number;
@@ -20,8 +21,7 @@ export const AudioCapture: React.FC<AudioCaptureProps> = ({
   setSessionId,
   sourceLanguage,
   setSourceLanguage,
-  isConnected,
-  isReady,
+  connectionStatus,
   isRecording,
   volume,
   onConnect,
@@ -29,6 +29,31 @@ export const AudioCapture: React.FC<AudioCaptureProps> = ({
   onStartCapture,
   onStopCapture,
 }) => {
+  const isConnected = connectionStatus !== "DISCONNECTED" && connectionStatus !== "CLOSED";
+
+  const renderStatusBadge = () => {
+    switch (connectionStatus) {
+      case "DISCONNECTED":
+        return <span className="badge badge-inactive">Disconnected</span>;
+      case "CONNECTING":
+        return <span className="badge badge-warning">Connecting to Backend...</span>;
+      case "CONNECTED_BACKEND":
+        return <span className="badge badge-info">Connected to Backend</span>;
+      case "GEMINI_CONNECTING":
+        return <span className="badge badge-warning">Connecting to Gemini...</span>;
+      case "GEMINI_READY":
+        return <span className="badge badge-success">Gemini Ready</span>;
+      case "STREAMING":
+        return <span className="badge badge-success">Streaming Audio</span>;
+      case "ERROR":
+        return <span className="badge badge-danger">Connection Error</span>;
+      case "CLOSED":
+        return <span className="badge badge-inactive">Session Closed</span>;
+    }
+  };
+
+  const canStartMicrophone = connectionStatus === "GEMINI_READY" && !isRecording;
+
   return (
     <div className="panel audio-capture-panel">
       <h3>Audio & Session Controls</h3>
@@ -62,9 +87,7 @@ export const AudioCapture: React.FC<AudioCaptureProps> = ({
       <div className="status-indicators">
         <div className="status-item">
           <span>Connection:</span>
-          <span className={`badge ${isConnected ? (isReady ? "badge-success" : "badge-warning") : "badge-inactive"}`}>
-            {isConnected ? (isReady ? "Ready" : "Connecting...") : "Disconnected"}
-          </span>
+          {renderStatusBadge()}
         </div>
         <div className="status-item">
           <span>Format:</span>
@@ -93,16 +116,16 @@ export const AudioCapture: React.FC<AudioCaptureProps> = ({
           </button>
         )}
 
-        {isConnected && isReady && (
-          !isRecording ? (
-            <button className="btn btn-success" onClick={onStartCapture}>
-              Start Microphone
-            </button>
-          ) : (
-            <button className="btn btn-warning" onClick={onStopCapture}>
-              Stop Microphone
-            </button>
-          )
+        {canStartMicrophone && (
+          <button className="btn btn-success" onClick={onStartCapture}>
+            Start Microphone
+          </button>
+        )}
+
+        {isRecording && (
+          <button className="btn btn-warning" onClick={onStopCapture}>
+            Stop Microphone
+          </button>
         )}
       </div>
     </div>

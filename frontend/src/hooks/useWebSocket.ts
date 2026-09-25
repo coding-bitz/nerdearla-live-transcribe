@@ -6,6 +6,16 @@ import {
   ExecutiveSummaryData,
 } from "../api/client";
 
+export type WsConnectionStatus =
+  | "DISCONNECTED"
+  | "CONNECTING"
+  | "CONNECTED_BACKEND"
+  | "GEMINI_CONNECTING"
+  | "GEMINI_READY"
+  | "STREAMING"
+  | "ERROR"
+  | "CLOSED";
+
 export interface ConnectOptions {
   sourceLanguage?: string;
   enableTranslation?: boolean;
@@ -17,8 +27,10 @@ export interface SubtitleItem {
   timestamp: number;
 }
 
+const MAX_RECONNECT_ATTEMPTS = 5;
+
 export function useWebSocket() {
-  const [isConnected, setIsConnected] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<WsConnectionStatus>("DISCONNECTED");
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<ErrorPayload | null>(null);
 
@@ -37,6 +49,12 @@ export function useWebSocket() {
   const bufferQueueRef = useRef<Array<{ action: () => void; releaseAt: number }>>([]);
   const isPausedRef = useRef(isPaused);
   isPausedRef.current = isPaused;
+
+  const manualDisconnectRef = useRef(false);
+  const reconnectAttemptsRef = useRef(0);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeSessionIdRef = useRef<string | null>(null);
+  const activeOptionsRef = useRef<ConnectOptions>({});
 
   // Process delayed production buffer queue
   useEffect(() => {
@@ -77,14 +95,27 @@ export function useWebSocket() {
     [bufferDelayMs]
   );
 
-  const connect = useCallback(
-    (sessionId: string, options: ConnectOptions = {}) => {
-      if (wsRef.current) {
+  const cleanupSocket = useCallback(() => {
+    if (wsRef.current) {
+      wsRef.current.onopen = null;
+      wsRef.current.onmessage = null;
+      wsRef.current.onerror = null;
+      wsRef.current.onclose = null;
+      try {
         wsRef.current.close();
+      } catch {
+        // Ignore close errors during cleanup
       }
+      wsRef.current = null;
+    }
+  }, []);
 
+  const internalConnect = useCallback(
+    (sessionId: string, options: ConnectOptions = {}) => {
+      cleanupSocket();
       setError(null);
       setIsReady(false);
+      setConnectionStatus("CONNECTING");
 
       const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const defaultHost = window.location.hostname === "localhost" ? "localhost:8080" : window.location.host;
@@ -100,15 +131,25 @@ export function useWebSocket() {
       wsRef.current = ws;
 
       ws.onopen = () => {
-        setIsConnected(true);
+        reconnectAttemptsRef.current = 0;
+        setConnectionStatus("CONNECTED_BACKEND");
       };
 
       ws.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data);
 
-          if (payload.type === "ready") {
+          if (payload.type === "status") {
+            const status = payload.status as WsConnectionStatus;
+            setConnectionStatus(status);
+            if (status === "GEMINI_READY") {
+              setIsReady(true);
+            } else if (status === "CLOSED" || status === "ERROR") {
+              setIsReady(false);
+            }
+          } else if (payload.type === "ready") {
             setIsReady(true);
+            setConnectionStatus("GEMINI_READY");
           } else if (payload.type === "transcription") {
             if (payload.subtype === "interim") {
               setInterimSubtitle(payload.text);
@@ -136,6 +177,7 @@ export function useWebSocket() {
             setAccessibility(payload.accessibility);
           } else if (payload.type === "error") {
             setError(payload);
+            setConnectionStatus("ERROR");
           }
         } catch {
           // Ignore non-json frames
@@ -143,33 +185,85 @@ export function useWebSocket() {
       };
 
       ws.onerror = () => {
+        setConnectionStatus("ERROR");
         setError({
           type: "error",
-          code: "WEBSOCKET_ERROR",
-          message: "WebSocket connection encountered an error",
+          code: "BACKEND_UNAVAILABLE",
+          message: "Backend service is unreachable. Verify backend server is running and accessible.",
           retryable: true,
         });
       };
 
       ws.onclose = () => {
-        setIsConnected(false);
         setIsReady(false);
+
+        if (manualDisconnectRef.current) {
+          setConnectionStatus("DISCONNECTED");
+          return;
+        }
+
+        // Controlled exponential backoff reconnection
+        if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
+          reconnectAttemptsRef.current += 1;
+          const attempt = reconnectAttemptsRef.current;
+          const delay = Math.min(1000 * Math.pow(2, attempt - 1), 10000);
+          setConnectionStatus("CONNECTING");
+
+          reconnectTimeoutRef.current = setTimeout(() => {
+            if (!manualDisconnectRef.current && activeSessionIdRef.current) {
+              internalConnect(activeSessionIdRef.current, activeOptionsRef.current);
+            }
+          }, delay);
+        } else {
+          setConnectionStatus("DISCONNECTED");
+          setError({
+            type: "error",
+            code: "RECONNECT_FAILED",
+            message: "Connection to backend lost after maximum retry attempts.",
+            retryable: true,
+          });
+        }
       };
     },
-    [scheduleBufferedAction]
+    [cleanupSocket, scheduleBufferedAction]
+  );
+
+  const connect = useCallback(
+    (sessionId: string, options: ConnectOptions = {}) => {
+      manualDisconnectRef.current = false;
+      reconnectAttemptsRef.current = 0;
+      activeSessionIdRef.current = sessionId;
+      activeOptionsRef.current = options;
+
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+
+      internalConnect(sessionId, options);
+    },
+    [internalConnect]
   );
 
   const disconnect = useCallback(() => {
-    if (wsRef.current) {
-      if (wsRef.current.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: "stop" }));
-      }
-      wsRef.current.close();
-      wsRef.current = null;
+    manualDisconnectRef.current = true;
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
     }
-    setIsConnected(false);
+
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      try {
+        wsRef.current.send(JSON.stringify({ type: "stop" }));
+      } catch {
+        // Ignore send errors during shutdown
+      }
+    }
+
+    cleanupSocket();
     setIsReady(false);
-  }, []);
+    setConnectionStatus("DISCONNECTED");
+  }, [cleanupSocket]);
 
   const sendAudioChunk = useCallback((base64Data: string) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -204,7 +298,6 @@ export function useWebSocket() {
   }, []);
 
   const emergencyStop = useCallback(() => {
-    // Instantly wipe pending production queue
     bufferQueueRef.current = [];
     setInterimSubtitle("");
     disconnect();
@@ -219,7 +312,8 @@ export function useWebSocket() {
   }, []);
 
   return {
-    isConnected,
+    connectionStatus,
+    isConnected: connectionStatus !== "DISCONNECTED" && connectionStatus !== "CLOSED",
     isReady,
     error,
     interimSubtitle,

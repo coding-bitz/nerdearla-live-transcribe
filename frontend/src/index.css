@@ -246,6 +246,7 @@ select {
 
 .badge-success { background-color: rgba(16, 185, 129, 0.2); color: var(--success); }
 .badge-warning { background-color: rgba(245, 158, 11, 0.2); color: var(--warning); }
+.badge-danger { background-color: rgba(239, 68, 68, 0.2); color: var(--danger); }
 .badge-inactive { background-color: rgba(148, 163, 184, 0.2); color: var(--text-secondary); }
 .badge-info { background-color: rgba(56, 189, 248, 0.2); color: var(--accent); }
 .badge-outline { border: 1px solid var(--border-color); color: var(--text-secondary); }

@@ -16,6 +16,7 @@ export function App() {
   const [targetLanguage, setTargetLanguage] = useState("en");
 
   const {
+    connectionStatus,
     isConnected,
     isReady,
     error: wsError,
@@ -125,7 +126,7 @@ export function App() {
           setSessionId={setSessionId}
           sourceLanguage={sourceLanguage}
           setSourceLanguage={setSourceLanguage}
-          isConnected={isConnected}
+          connectionStatus={connectionStatus}
           isReady={isReady}
           isRecording={isRecording}
           volume={volume}
