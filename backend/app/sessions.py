@@ -1,3 +1,4 @@
+from __future__ import annotations
 import json
 import logging
 import time
@@ -42,10 +43,12 @@ class SessionManager:
                 state = SessionState.model_validate_json(raw_data)
                 self._local_cache[session_id] = state
                 return state
+            return self._local_cache.get(session_id)
         except Exception as exc:
-            logger.debug(f"Redis get failed, using local fallback: {exc}")
-
-        return self._local_cache.get(session_id)
+            if settings.environment == "production":
+                raise SessionError(f"Redis unavailable in production environment: {exc}") from exc
+            logger.warning(f"Redis get failed in development, using local fallback: {exc}")
+            return self._local_cache.get(session_id)
 
     async def save(self, session: SessionState) -> None:
         self._local_cache[session.session_id] = session
@@ -54,7 +57,9 @@ class SessionManager:
             key = self._redis_key(session.session_id)
             await redis.set(key, session.model_dump_json(), ex=SESSION_TTL_SECONDS)
         except Exception as exc:
-            logger.debug(f"Redis save failed, stored in local cache only: {exc}")
+            if settings.environment == "production":
+                raise SessionError(f"Redis unavailable in production environment: {exc}") from exc
+            logger.warning(f"Redis save failed in development, stored in local cache only: {exc}")
 
     async def get_or_create(
         self,

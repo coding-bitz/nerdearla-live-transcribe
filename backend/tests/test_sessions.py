@@ -54,3 +54,25 @@ async def test_session_chunk_count_and_status() -> None:
     await sm.update_status("test-sess-4", "stopped")
     session = await sm.get("test-sess-4")
     assert session.status == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_production_redis_failure_raises_session_error() -> None:
+    from unittest.mock import AsyncMock, patch
+    from app.config import settings
+    from app.errors import SessionError
+
+    sm = SessionManager()
+    original_env = settings.environment
+    settings.environment = "production"
+
+    mock_redis = AsyncMock()
+    mock_redis.get.side_effect = ConnectionError("Redis connection dropped")
+    mock_redis.set.side_effect = ConnectionError("Redis connection dropped")
+
+    try:
+        with patch("app.sessions.get_redis_client", return_value=mock_redis):
+            with pytest.raises(SessionError, match="Redis unavailable in production"):
+                await sm.get("prod-session-1")
+    finally:
+        settings.environment = original_env

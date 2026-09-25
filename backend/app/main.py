@@ -1,7 +1,8 @@
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from app.ai.accessibility import enhance_for_accessibility
 from app.ai.summary import generate_executive_summary
@@ -51,14 +52,41 @@ async def health_check() -> Dict[str, str]:
 
 
 @app.get("/ready")
-async def readiness_check() -> Dict[str, Any]:
+async def readiness_check() -> JSONResponse:
     redis_healthy = await ping_redis()
-    return {
-        "status": "ready",
-        "models": ALLOWED_MODELS,
-        "redis_connected": redis_healthy,
-        "environment": settings.environment,
-    }
+    if not redis_healthy:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "not_ready",
+                "reason": "Redis connection unavailable",
+                "models": ALLOWED_MODELS,
+                "redis_connected": False,
+                "environment": settings.environment,
+            },
+        )
+
+    if settings.environment == "production" and not settings.google_cloud_project:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "not_ready",
+                "reason": "GOOGLE_CLOUD_PROJECT is required in production",
+                "models": ALLOWED_MODELS,
+                "redis_connected": True,
+                "environment": settings.environment,
+            },
+        )
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "ready",
+            "models": ALLOWED_MODELS,
+            "redis_connected": True,
+            "environment": settings.environment,
+        },
+    )
 
 
 @app.get("/api/sessions/{session_id}")

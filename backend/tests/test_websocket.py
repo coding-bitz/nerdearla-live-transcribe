@@ -18,15 +18,25 @@ def test_health_endpoint(client: TestClient) -> None:
     assert response.json() == {"status": "ok"}
 
 
-def test_readiness_endpoint(client: TestClient) -> None:
-    response = client.get("/ready")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "ready"
-    assert "models" in data
-    assert data["models"]["transcription"] == "gemini-3.5-transcribe-live-preview"
-    assert data["models"]["translation"] == "gemini-3.5-live-translate-preview"
-    assert data["models"]["utility"] == "gemini-3.5-flash-lite"
+def test_readiness_endpoint_unhealthy_redis(client: TestClient) -> None:
+    with patch("app.main.ping_redis", return_value=False):
+        response = client.get("/ready")
+        assert response.status_code == 503
+        data = response.json()
+        assert data["status"] == "not_ready"
+        assert data["redis_connected"] is False
+
+
+def test_readiness_endpoint_healthy_redis(client: TestClient) -> None:
+    with patch("app.main.ping_redis", return_value=True):
+        response = client.get("/ready")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "ready"
+        assert data["redis_connected"] is True
+        assert data["models"]["transcription"] == "gemini-3.5-transcribe-live-preview"
+        assert data["models"]["translation"] == "gemini-3.5-live-translate-preview"
+        assert data["models"]["utility"] == "gemini-3.5-flash-lite"
 
 
 def test_session_not_found(client: TestClient) -> None:
