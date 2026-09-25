@@ -12,6 +12,7 @@ from app.ai.summary import generate_executive_summary
 from app.ai.transcription import LiveTranscriptionSession
 from app.ai.translation import LiveTranslationSession
 from app.audio import compute_audio_metrics, validate_pcm16_chunk
+from app.auth.jwt import decode_access_token
 from app.errors import (
     AppError,
     InvalidAudioFormatError,
@@ -28,6 +29,8 @@ router = APIRouter()
 
 class ConnectionState(str, Enum):
     CONNECTING = "CONNECTING"
+    AUTHENTICATING = "AUTHENTICATING"
+    AUTHENTICATED = "AUTHENTICATED"
     GEMINI_CONNECTING = "GEMINI_CONNECTING"
     GEMINI_READY = "GEMINI_READY"
     STREAMING = "STREAMING"
@@ -52,6 +55,8 @@ class SessionConnectionHandler:
         self.enable_translation = enable_translation
         self.target_language = target_language
         self.state = ConnectionState.CONNECTING
+        self.authenticated = False
+        self.authenticated_user: Optional[str] = None
 
         self.tx_session: Optional[LiveTranscriptionSession] = None
         self.translate_session: Optional[LiveTranslationSession] = None
@@ -82,6 +87,30 @@ class SessionConnectionHandler:
         })
 
     async def initialize(self) -> None:
+        self._running = True
+        await self.set_state(ConnectionState.AUTHENTICATING)
+
+    async def authenticate(self, token: str) -> bool:
+        """Validates first-message authentication token before allowing Gemini Live startup."""
+        try:
+            payload = decode_access_token(token)
+            self.authenticated_user = payload.get("sub")
+            self.authenticated = True
+            await self.set_state(ConnectionState.AUTHENTICATED)
+            await self.send_json({
+                "type": "auth_success",
+                "username": self.authenticated_user,
+                "sessionId": self.session_id,
+            })
+            await self.start_gemini_sessions()
+            return True
+        except AppError as err:
+            await self.send_json(err.to_dict())
+            await self.set_state(ConnectionState.ERROR)
+            return False
+
+    async def start_gemini_sessions(self) -> None:
+        """Starts live AI sessions only after successful client authentication."""
         await session_manager.get_or_create(
             self.session_id,
             source_language=self.source_language,
@@ -89,7 +118,6 @@ class SessionConnectionHandler:
             target_language=self.target_language,
         )
 
-        self._running = True
         await self.set_state(ConnectionState.GEMINI_CONNECTING)
 
         # Initialize live transcription session
@@ -195,6 +223,18 @@ class SessionConnectionHandler:
                     await self.send_json(format_error_payload("CHAPTER_ERROR", str(exc)))
 
     async def handle_audio_bytes(self, pcm_bytes: bytes) -> None:
+        if not self.authenticated:
+            await self.send_json(
+                format_error_payload(
+                    "AUTH_REQUIRED",
+                    "Cannot stream audio: client is not authenticated.",
+                    retryable=False,
+                )
+            )
+            await self.set_state(ConnectionState.ERROR)
+            await self.websocket.close(code=1008)
+            return
+
         # Enforce strict handshake: audio cannot be streamed before Gemini Live setup_complete
         if self.state not in (ConnectionState.GEMINI_READY, ConnectionState.STREAMING):
             await self.send_json(
@@ -239,6 +279,26 @@ class SessionConnectionHandler:
             return
 
         msg_type = data.get("type")
+
+        # Prior to authentication, strictly only type: "auth" is accepted
+        if not self.authenticated:
+            if msg_type == "auth":
+                token = data.get("token", "")
+                success = await self.authenticate(token)
+                if not success:
+                    await self.websocket.close(code=1008)
+                return
+            else:
+                await self.send_json(
+                    format_error_payload(
+                        "AUTH_REQUIRED",
+                        "Authentication required. First message must be type: 'auth'",
+                        retryable=False,
+                    )
+                )
+                await self.set_state(ConnectionState.ERROR)
+                await self.websocket.close(code=1008)
+                return
 
         if msg_type == "audio":
             b64_data = data.get("data", "")
@@ -305,6 +365,9 @@ class SessionConnectionHandler:
         except Exception as exc:
             await self.send_json(format_error_payload("ACCESSIBILITY_ERROR", str(exc)))
 
+    def is_active(self) -> bool:
+        return self._running and self.state not in (ConnectionState.ERROR, ConnectionState.CLOSED)
+
     async def cleanup(self) -> None:
         self._running = False
         if self.state != ConnectionState.CLOSED:
@@ -315,11 +378,21 @@ class SessionConnectionHandler:
                 task.cancel()
 
         if self.tx_session:
-            await self.tx_session.close()
+            try:
+                close_coro = self.tx_session.close()
+                if asyncio.iscoroutine(close_coro):
+                    await close_coro
+            except Exception:
+                pass
             self.tx_session = None
 
         if self.translate_session:
-            await self.translate_session.close()
+            try:
+                close_coro = self.translate_session.close()
+                if asyncio.iscoroutine(close_coro):
+                    await close_coro
+            except Exception:
+                pass
             self.translate_session = None
 
 
@@ -349,14 +422,21 @@ async def websocket_session_endpoint(
         return
 
     try:
-        while True:
+        while handler.is_active():
             message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
             if "bytes" in message and message["bytes"]:
                 await handler.handle_audio_bytes(message["bytes"])
             elif "text" in message and message["text"]:
                 await handler.handle_client_message(message["text"])
+            if not handler.is_active():
+                break
     except WebSocketDisconnect:
         logger.info(f"WebSocket client disconnected for session {session_id}")
+    except RuntimeError as exc:
+        if "disconnect message has been received" not in str(exc) and "Cannot call" not in str(exc):
+            logger.error(f"WebSocket session runtime error: {exc}")
     except Exception as exc:
         logger.error(f"WebSocket session error: {exc}")
     finally:

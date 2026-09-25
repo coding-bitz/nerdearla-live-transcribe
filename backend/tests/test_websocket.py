@@ -62,7 +62,18 @@ async def test_session_summary_empty_transcript(client: TestClient, auth_headers
     assert response.status_code == 400
 
 
-def test_websocket_rejects_audio_before_ready(client: TestClient) -> None:
+@pytest.fixture
+def valid_jwt_token():
+    from app.auth.jwt import create_access_token
+    from app.config import settings
+    original = settings.auth_jwt_secret
+    settings.auth_jwt_secret = "test-secret-that-is-at-least-32-characters-long!"
+    token = create_access_token("admin")
+    yield token
+    settings.auth_jwt_secret = original
+
+
+def test_websocket_rejects_audio_before_ready(client: TestClient, valid_jwt_token: str) -> None:
     with patch("app.websocket.LiveTranscriptionSession") as MockTxSession:
         instance = MockTxSession.return_value
         instance.start = AsyncMock()
@@ -70,7 +81,6 @@ def test_websocket_rejects_audio_before_ready(client: TestClient) -> None:
         instance.send_audio_chunk = AsyncMock()
 
         async def hanging_events():
-            # Never yields ready message
             import asyncio
             while True:
                 await asyncio.sleep(1)
@@ -79,10 +89,18 @@ def test_websocket_rejects_audio_before_ready(client: TestClient) -> None:
         instance.receive_events = hanging_events
 
         with client.websocket_connect("/ws/not-ready-session") as ws:
-            # First message received is the GEMINI_CONNECTING state transition
-            msg = json.loads(ws.receive_text())
-            assert msg["type"] == "status"
-            assert msg["status"] == "GEMINI_CONNECTING"
+            # 1. State AUTHENTICATING
+            msg0 = json.loads(ws.receive_text())
+            assert msg0["type"] == "status" and msg0["status"] == "AUTHENTICATING"
+
+            # 2. Authenticate
+            ws.send_text(json.dumps({"type": "auth", "token": valid_jwt_token}))
+            assert json.loads(ws.receive_text())["status"] == "AUTHENTICATED"
+            assert json.loads(ws.receive_text())["type"] == "auth_success"
+
+            # 3. State GEMINI_CONNECTING
+            msg1 = json.loads(ws.receive_text())
+            assert msg1["type"] == "status" and msg1["status"] == "GEMINI_CONNECTING"
 
             # Attempt sending audio before GEMINI_READY
             silence_b64 = base64.b64encode(b"\x00\x00" * 160).decode("ascii")
@@ -94,7 +112,7 @@ def test_websocket_rejects_audio_before_ready(client: TestClient) -> None:
             assert "Waiting for 'GEMINI_READY'" in err["message"]
 
 
-def test_websocket_audio_format_validation(client: TestClient) -> None:
+def test_websocket_audio_format_validation(client: TestClient, valid_jwt_token: str) -> None:
     with patch("app.websocket.LiveTranscriptionSession") as MockTxSession:
         instance = MockTxSession.return_value
         instance.start = AsyncMock()
@@ -107,6 +125,13 @@ def test_websocket_audio_format_validation(client: TestClient) -> None:
         instance.receive_events = ready_events
 
         with client.websocket_connect("/ws/test-ws-session") as ws:
+            # Authenticate
+            msg0 = json.loads(ws.receive_text())
+            assert msg0["type"] == "status" and msg0["status"] == "AUTHENTICATING"
+            ws.send_text(json.dumps({"type": "auth", "token": valid_jwt_token}))
+            assert json.loads(ws.receive_text())["status"] == "AUTHENTICATED"
+            assert json.loads(ws.receive_text())["type"] == "auth_success"
+
             # Read status frames until GEMINI_READY
             msg1 = json.loads(ws.receive_text())
             assert msg1["type"] == "status" and msg1["status"] == "GEMINI_CONNECTING"
@@ -125,7 +150,7 @@ def test_websocket_audio_format_validation(client: TestClient) -> None:
             assert data["code"] == "INVALID_AUDIO_FORMAT"
 
 
-def test_websocket_valid_audio_forwarded(client: TestClient) -> None:
+def test_websocket_valid_audio_forwarded(client: TestClient, valid_jwt_token: str) -> None:
     with patch("app.websocket.LiveTranscriptionSession") as MockTxSession:
         instance = MockTxSession.return_value
         instance.start = AsyncMock()
@@ -138,6 +163,13 @@ def test_websocket_valid_audio_forwarded(client: TestClient) -> None:
         instance.receive_events = ready_events
 
         with client.websocket_connect("/ws/valid-audio-session") as ws:
+            # Authenticate
+            msg0 = json.loads(ws.receive_text())
+            assert msg0["type"] == "status" and msg0["status"] == "AUTHENTICATING"
+            ws.send_text(json.dumps({"type": "auth", "token": valid_jwt_token}))
+            assert json.loads(ws.receive_text())["status"] == "AUTHENTICATED"
+            assert json.loads(ws.receive_text())["type"] == "auth_success"
+
             # Read status frames until GEMINI_READY
             msg1 = json.loads(ws.receive_text())
             assert msg1["type"] == "status" and msg1["status"] == "GEMINI_CONNECTING"
