@@ -29,13 +29,17 @@ export GOOGLE_CLOUD_LOCATION=global
 ```
 
 ### 2.2 Run with Docker Compose
-To launch both the backend and local Redis services:
+To launch the complete stack (Backend, Frontend, and Redis services):
 
 ```bash
 docker compose up --build
 ```
 
-The backend starts listening on `http://localhost:8080`.
+Endpoints:
+* **Frontend Application**: `http://localhost:5173`
+* **Backend Health Check**: `curl -fsS http://localhost:8080/health` (HTTP 200 `{"status":"ok"}`)
+* **Backend Readiness Check**: `curl -i http://localhost:8080/ready` (HTTP 200 with Redis connected; HTTP 503 if Redis is down)
+* **Redis Store**: `localhost:6379`
 
 ### 2.3 Run the Frontend
 In a separate terminal:

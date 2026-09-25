@@ -54,3 +54,7 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+
+# Internal planning files
+plan.md
+*plan*.md

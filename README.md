@@ -121,11 +121,17 @@ npm run dev
 
 ## 7. Docker & Local Services
 
-Run the complete local stack (Backend + Redis) via Docker Compose:
+Run the complete local stack (Backend + Frontend + Redis) via Docker Compose:
 
 ```bash
 docker compose up --build
 ```
+
+Verify service endpoints and container health:
+* **Frontend**: `http://localhost:5173`
+* **Backend API & Health**: `curl http://localhost:8080/health` (HTTP 200 `{"status":"ok"}`)
+* **Backend Readiness**: `curl http://localhost:8080/ready` (HTTP 200 when Redis is connected; HTTP 503 if Redis is unavailable)
+* **Redis**: `localhost:6379` (healthy)
 
 ---
 
@@ -154,12 +160,14 @@ See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for full deployment instructions an
 
 ## 10. Automated Tests
 
-Run backend unit tests and integration tests:
+Run backend unit tests, integration tests, and live ADC verification:
 
 ```bash
 cd backend
 PYTHONPATH=. pytest
 ```
+
+*Note on Live Google Cloud Tests:* `backend/tests/test_live_gemini.py` performs real API calls against Gemini models when `GOOGLE_CLOUD_PROJECT` and ADC credentials are present; otherwise, it reports an explicit status of `NOT EXECUTED — ADC credentials unavailable or GOOGLE_CLOUD_PROJECT unset` without mock data.
 
 Run frontend type check and production build:
 
@@ -170,7 +178,18 @@ npm run build
 
 ---
 
-## 11. Error Handling & Transparency
+## 11. Connection States & Error Transparency
+
+### Granular Lifecycle Handshake
+The WebSocket connection strictly enforces the following state transitions:
+1. `DISCONNECTED`: Initial idle state.
+2. `CONNECTING`: Client establishing WebSocket connection to backend.
+3. `CONNECTED_BACKEND`: WebSocket established with FastAPI backend.
+4. `GEMINI_CONNECTING`: Backend establishing Live API connection to Google GenAI.
+5. `GEMINI_READY`: Live session received `setup_complete`. Microphone capture can begin.
+6. `STREAMING`: Raw 16kHz mono PCM frames streaming to Gemini.
+7. `ERROR`: Explicit error condition reported with structured error payload.
+8. `CLOSED`: Clean session shutdown and resource release.
 
 When an AI service encounters an issue, the exact verified provider error is forwarded to the client:
 
