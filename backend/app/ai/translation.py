@@ -1,3 +1,4 @@
+from __future__ import annotations
 import asyncio
 import time
 from typing import AsyncGenerator, Dict, Optional
@@ -14,7 +15,6 @@ class LiveTranslationSession:
         assert_translation_model(TRANSLATION_MODEL)
         self.model = TRANSLATION_MODEL
         self.target_language_code = target_language_code
-        self.client = get_genai_client()
         self._session_ctx = None
         self._session = None
         self._is_ready = asyncio.Event()
@@ -32,8 +32,9 @@ class LiveTranslationSession:
             ),
         )
 
+        client = get_genai_client()
         try:
-            self._session_ctx = self.client.aio.live.connect(
+            self._session_ctx = client.aio.live.connect(
                 model=self.model,
                 config=config,
             )
@@ -89,7 +90,7 @@ class LiveTranslationSession:
 
                 now_ms = int(time.time() * 1000)
 
-                # Translation text comes from output_transcription
+                # Translation text comes strictly from output_transcription
                 if server_content.output_transcription is not None:
                     text = server_content.output_transcription.text
                     if text and text.strip():
@@ -99,17 +100,6 @@ class LiveTranslationSession:
                             "text": text.strip(),
                             "timestamp": now_ms,
                         }
-
-                # Fallback check on model_turn text if populated
-                if server_content.model_turn is not None and server_content.model_turn.parts:
-                    for part in server_content.model_turn.parts:
-                        if part.text and part.text.strip():
-                            yield {
-                                "type": "translation",
-                                "subtype": "translation",
-                                "text": part.text.strip(),
-                                "timestamp": now_ms,
-                            }
         except Exception as exc:
             if not self._is_closed:
                 raise TranslationError(f"Error receiving from translation session: {exc}") from exc

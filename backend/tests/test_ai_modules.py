@@ -94,3 +94,28 @@ async def test_live_translation_send_before_ready_fails() -> None:
     session = LiveTranslationSession()
     with pytest.raises(TranslationError, match="not ready to receive audio"):
         await session.send_audio_chunk(b"\x00\x00" * 160)
+
+
+def test_get_genai_client_missing_project_raises_auth_error() -> None:
+    from app.ai.client import get_genai_client, reset_genai_client
+    from app.config import settings
+    from app.errors import AuthError
+
+    reset_genai_client()
+    original = settings.google_cloud_project
+    try:
+        settings.google_cloud_project = ""
+        with pytest.raises(AuthError, match="GOOGLE_CLOUD_PROJECT is required"):
+            get_genai_client()
+    finally:
+        settings.google_cloud_project = original
+        reset_genai_client()
+
+
+def test_summary_function_annotation_inspection() -> None:
+    import inspect
+    from app.ai.summary import generate_executive_summary
+
+    sig = inspect.signature(generate_executive_summary)
+    assert "detected_chapters" in sig.parameters
+

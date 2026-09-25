@@ -1,5 +1,6 @@
+from __future__ import annotations
 import json
-from typing import Any, Dict, List, Literal
+from typing import Any, Dict, List, Literal, Optional
 from google.genai import types
 from pydantic import BaseModel, Field
 from app.ai.client import get_genai_client

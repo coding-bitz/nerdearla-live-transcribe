@@ -1,3 +1,4 @@
+from __future__ import annotations
 import asyncio
 import time
 from typing import AsyncGenerator, Dict, List, Optional
@@ -14,7 +15,6 @@ class LiveTranscriptionSession:
         assert_transcription_model(TRANSCRIPTION_MODEL)
         self.model = TRANSCRIPTION_MODEL
         self.language_codes = language_codes or ["es-ES", "en-US"]
-        self.client = get_genai_client()
         self._session_ctx = None
         self._session = None
         self._is_ready = asyncio.Event()
@@ -29,8 +29,9 @@ class LiveTranscriptionSession:
             ),
         )
 
+        client = get_genai_client()
         try:
-            self._session_ctx = self.client.aio.live.connect(
+            self._session_ctx = client.aio.live.connect(
                 model=self.model,
                 config=config,
             )
