@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { AuthProvider, useAuth } from "./auth/AuthContext";
+import { LoginPage } from "./auth/LoginPage";
 import { AccessibilityToggle } from "./components/AccessibilityToggle";
 import { AudioCapture } from "./components/AudioCapture";
 import { ChapterList } from "./components/ChapterList";
@@ -9,7 +11,9 @@ import { TranslationDisplay } from "./components/TranslationDisplay";
 import { useAudioCapture } from "./hooks/useAudioCapture";
 import { useWebSocket } from "./hooks/useWebSocket";
 
-export function App() {
+function AuthenticatedLiveApp() {
+  const { username, logout } = useAuth();
+
   const [sessionId, setSessionId] = useState("nerdearla-main-room");
   const [sourceLanguage, setSourceLanguage] = useState("es-ES");
   const [enableTranslation, setEnableTranslation] = useState(false);
@@ -62,6 +66,12 @@ export function App() {
     disconnect();
   };
 
+  const handleLogout = () => {
+    stopCapture();
+    disconnect();
+    logout();
+  };
+
   const handleStartCapture = async () => {
     try {
       await startCapture((_pcmBytes, base64Data) => {
@@ -101,10 +111,19 @@ export function App() {
   return (
     <div className="app-container">
       <header className="app-header">
-        <h1>Nerdearla Live Subtitles</h1>
-        <div className="header-badges">
-          <span className="badge badge-info">Google Cloud Run</span>
-          <span className="badge badge-outline">Gemini Enterprise Live</span>
+        <div>
+          <h1>Nerdearla Live Subtitles</h1>
+        </div>
+
+        <div className="header-user-controls">
+          <span className="user-badge">Operator: {username}</span>
+          <button className="btn btn-sm btn-outline" onClick={handleLogout}>
+            Sign Out
+          </button>
+          <div className="header-badges">
+            <span className="badge badge-info">Google Cloud Run</span>
+            <span className="badge badge-outline">Gemini Enterprise Live</span>
+          </div>
         </div>
       </header>
 
@@ -183,6 +202,24 @@ export function App() {
         />
       </div>
     </div>
+  );
+}
+
+function AppRoot() {
+  const { authState } = useAuth();
+
+  if (authState !== "AUTHENTICATED") {
+    return <LoginPage />;
+  }
+
+  return <AuthenticatedLiveApp />;
+}
+
+export function App() {
+  return (
+    <AuthProvider>
+      <AppRoot />
+    </AuthProvider>
   );
 }
 

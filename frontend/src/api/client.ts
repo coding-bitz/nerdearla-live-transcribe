@@ -43,6 +43,21 @@ export interface SessionData {
 
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8080";
 
+export async function authenticatedFetch(
+  path: string,
+  options: RequestInit = {},
+  token?: string | null
+): Promise<Response> {
+  const headers = new Headers(options.headers || {});
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  return fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers,
+  });
+}
+
 export async function fetchHealth(): Promise<{ status: string }> {
   const res = await fetch(`${API_BASE}/health`);
   if (!res.ok) throw new Error(`Health check failed: HTTP ${res.status}`);
@@ -60,16 +75,18 @@ export async function fetchReady(): Promise<{
   return res.json();
 }
 
-export async function fetchSession(sessionId: string): Promise<SessionData> {
-  const res = await fetch(`${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}`);
+export async function fetchSession(sessionId: string, token?: string | null): Promise<SessionData> {
+  const res = await authenticatedFetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {}, token);
   if (!res.ok) throw new Error(`Failed fetching session: HTTP ${res.status}`);
   return res.json();
 }
 
-export async function requestSummary(sessionId: string): Promise<ExecutiveSummaryData> {
-  const res = await fetch(`${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}/summary`, {
-    method: "POST",
-  });
+export async function requestSummary(sessionId: string, token?: string | null): Promise<ExecutiveSummaryData> {
+  const res = await authenticatedFetch(
+    `/api/sessions/${encodeURIComponent(sessionId)}/summary`,
+    { method: "POST" },
+    token
+  );
   if (!res.ok) {
     const errData = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
     throw new Error(errData.detail || "Summary generation failed");
@@ -80,13 +97,18 @@ export async function requestSummary(sessionId: string): Promise<ExecutiveSummar
 export async function requestAccessibility(
   sessionId: string,
   text: string,
+  token?: string | null,
   audioFeatures?: Record<string, number>
 ): Promise<AccessibilityData> {
-  const res = await fetch(`${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}/accessibility`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, audio_features: audioFeatures }),
-  });
+  const res = await authenticatedFetch(
+    `/api/sessions/${encodeURIComponent(sessionId)}/accessibility`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, audio_features: audioFeatures }),
+    },
+    token
+  );
   if (!res.ok) {
     const errData = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
     throw new Error(errData.detail || "Accessibility enhancement failed");
