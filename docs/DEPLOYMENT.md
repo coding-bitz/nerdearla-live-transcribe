@@ -77,16 +77,31 @@ gcloud iam service-accounts create nerdearla-subtitles \
   --project="${GOOGLE_CLOUD_PROJECT}"
 ```
 
-#### Step B: Grant AI Platform Access
-Assign the verified role required for calling generative models:
+#### Step B: Grant AI Platform & Secret Manager Access
+Assign the verified roles required for invoking generative models and accessing runtime secrets:
 
 ```bash
 gcloud projects add-iam-policy-binding "${GOOGLE_CLOUD_PROJECT}" \
   --member="serviceAccount:nerdearla-subtitles@${GOOGLE_CLOUD_PROJECT}.iam.gserviceaccount.com" \
   --role="roles/aiplatform.user"
+
+gcloud projects add-iam-policy-binding "${GOOGLE_CLOUD_PROJECT}" \
+  --member="serviceAccount:nerdearla-subtitles@${GOOGLE_CLOUD_PROJECT}.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
 ```
 
-#### Step C: Deploy Backend Service
+#### Step C: Provision Production Secrets
+Generate an Argon2id hash using the CLI tool (`backend/scripts/hash_password.py`), then store it in Secret Manager:
+
+```bash
+gcloud secrets create nerdearla-auth-password-hash --replication-policy=automatic
+echo -n "$ARGON2_HASH" | gcloud secrets versions add nerdearla-auth-password-hash --data-file=-
+
+gcloud secrets create nerdearla-auth-jwt-secret --replication-policy=automatic
+openssl rand -hex 32 | gcloud secrets versions add nerdearla-auth-jwt-secret --data-file=-
+```
+
+#### Step D: Deploy Backend Service
 ```bash
 gcloud run deploy nerdearla-subtitles-backend \
   --source ./backend \
@@ -100,12 +115,17 @@ gcloud run deploy nerdearla-subtitles-backend \
   --max-instances=10 \
   --session-affinity \
   --allow-unauthenticated \
-  --set-env-vars="GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT},GOOGLE_CLOUD_LOCATION=global,ENVIRONMENT=production"
+  --set-env-vars="GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT},GOOGLE_CLOUD_LOCATION=global,ENVIRONMENT=production,AUTH_USERNAME=admin" \
+  --set-secrets="AUTH_PASSWORD_HASH=nerdearla-auth-password-hash:latest,AUTH_JWT_SECRET=nerdearla-auth-jwt-secret:latest"
 ```
 
 *Note on WebSocket Timeout:* Cloud Run requires an explicit `--timeout` (up to 3600 seconds) to ensure long-lived WebSocket connections are not terminated prematurely.
 
-#### Step D: Verify Deployment Health
+#### Step E: Verify Deployment Health & Smoke Test
+```bash
+BACKEND_URL=$(gcloud run services describe nerdearla-subtitles-backend --region us-central1 --format="value(status.url)")
+./scripts/smoke_test_cloud_run.sh "${BACKEND_URL}" admin
+```
 ```bash
 BACKEND_URL=$(gcloud run services describe nerdearla-subtitles-backend --region us-central1 --format="value(status.url)")
 curl -fsS "${BACKEND_URL}/health"

@@ -59,3 +59,15 @@ WebM/Opus compressed container formats are not sent to Gemini Live. The browser 
 
 ### 4. Application Default Credentials (ADC)
 The backend does not require or accept private API keys in runtime environments. Cloud Run instances execute under a dedicated service account (`nerdearla-subtitles`) authorized with `roles/aiplatform.user`.
+
+### 5. Stateless Authentication & Boundary Separation
+The application strictly decouples user identity from Google Cloud infrastructure access:
+
+| System Boundary | Purpose | Mechanism |
+|---|---|---|
+| **App Operator** | Enter Nerdearla Application | username + Argon2id password hash + stateless JWT |
+| **Backend → Google** | Invoke Gemini Live / Utility Models | ADC + dedicated Cloud Run Service Account (`roles/aiplatform.user`) |
+| **Backend → Secrets** | Access sensitive keys & hashes | Cloud Run Secret Manager (`roles/secretmanager.secretAccessor`) |
+| **Backend → Redis** | Shared session state & login rate limits | Direct TCP network connectivity / Memorystore |
+| **Frontend → Backend** | REST API calls | HTTP header: `Authorization: Bearer <JWT>` |
+| **Frontend → WebSocket**| Live captioning streaming | WebSocket Frame 1: `{"type": "auth", "token": "<JWT>"}` |

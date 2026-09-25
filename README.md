@@ -95,6 +95,11 @@ UTILITY_MODEL=gemini-3.5-flash-lite
 
 DEFAULT_SOURCE_LANGUAGE=es-ES
 DEFAULT_TRANSLATION_LANGUAGE=es
+
+AUTH_USERNAME=admin
+AUTH_PASSWORD_HASH=
+AUTH_JWT_SECRET=
+AUTH_JWT_EXPIRES_SECONDS=28800
 ```
 
 ---
@@ -107,6 +112,10 @@ cd backend
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+
+# Generate an Argon2id password hash for your operator account
+python3 scripts/hash_password.py
+
 uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 ```
 
@@ -185,11 +194,23 @@ The WebSocket connection strictly enforces the following state transitions:
 1. `DISCONNECTED`: Initial idle state.
 2. `CONNECTING`: Client establishing WebSocket connection to backend.
 3. `CONNECTED_BACKEND`: WebSocket established with FastAPI backend.
-4. `GEMINI_CONNECTING`: Backend establishing Live API connection to Google GenAI.
-5. `GEMINI_READY`: Live session received `setup_complete`. Microphone capture can begin.
-6. `STREAMING`: Raw 16kHz mono PCM frames streaming to Gemini.
-7. `ERROR`: Explicit error condition reported with structured error payload.
-8. `CLOSED`: Clean session shutdown and resource release.
+4. `AUTHENTICATING`: Awaiting operator JWT token frame. Gemini Live is not started.
+5. `AUTHENTICATED`: Operator token verified. Initiating live session setup.
+6. `GEMINI_CONNECTING`: Backend establishing Live API connection to Google GenAI.
+7. `GEMINI_READY`: Live session received `setup_complete`. Microphone capture can begin.
+8. `STREAMING`: Raw 16kHz mono PCM frames streaming to Gemini.
+9. `ERROR`: Explicit error condition reported with structured error payload.
+10. `CLOSED`: Clean session shutdown and resource release.
+
+See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) for full authentication architecture and security specifications.
+
+---
+
+## 12. Single-Operator Model & Scalability
+
+This version supports a single logical operator identity (`admin`). Authentication is stateless and uses cryptographic JWT validation, enabling horizontal multi-instance scaling on Cloud Run without in-memory state or session affinity requirements.
+
+---
 
 When an AI service encounters an issue, the exact verified provider error is forwarded to the client:
 
@@ -209,13 +230,19 @@ Demo or placeholder text is never displayed in place of failed AI calls.
 
 ---
 
-## 12. Costs & Pricing
+## 12. Single-Operator Model & Scalability
+
+This version supports a single logical operator identity (`admin`). Authentication is stateless and uses cryptographic JWT validation, enabling horizontal multi-instance scaling on Cloud Run without in-memory state or session affinity requirements.
+
+---
+
+## 13. Costs & Pricing
 
 Detailed official pricing rates, calculation formulas, and conference scenario projections are available in [docs/COSTS.md](docs/COSTS.md).
 
 ---
 
-## 13. Limitations of Models
+## 14. Limitations of Models
 
 * **Preview Status**: `gemini-3.5-transcribe-live-preview` and `gemini-3.5-live-translate-preview` are preview models and subject to Google Cloud regional availability and quota constraints.
 * **Network Latency**: Real-time captioning latency depends on network transit time between client, Cloud Run, and Google Agent Platform.
@@ -223,6 +250,6 @@ Detailed official pricing rates, calculation formulas, and conference scenario p
 
 ---
 
-## 14. License
+## 15. License
 
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the full license text.
