@@ -51,6 +51,38 @@ async def test_session_summary_empty_transcript(client: TestClient) -> None:
     assert response.status_code == 400
 
 
+def test_websocket_rejects_audio_before_ready(client: TestClient) -> None:
+    with patch("app.websocket.LiveTranscriptionSession") as MockTxSession:
+        instance = MockTxSession.return_value
+        instance.start = AsyncMock()
+        instance.close = AsyncMock()
+        instance.send_audio_chunk = AsyncMock()
+
+        async def hanging_events():
+            # Never yields ready message
+            import asyncio
+            while True:
+                await asyncio.sleep(1)
+                yield {}
+
+        instance.receive_events = hanging_events
+
+        with client.websocket_connect("/ws/not-ready-session") as ws:
+            # First message received is the GEMINI_CONNECTING state transition
+            msg = json.loads(ws.receive_text())
+            assert msg["type"] == "status"
+            assert msg["status"] == "GEMINI_CONNECTING"
+
+            # Attempt sending audio before GEMINI_READY
+            silence_b64 = base64.b64encode(b"\x00\x00" * 160).decode("ascii")
+            ws.send_text(json.dumps({"type": "audio", "data": silence_b64}))
+
+            err = json.loads(ws.receive_text())
+            assert err["type"] == "error"
+            assert err["code"] == "TRANSCRIPTION_ERROR"
+            assert "Waiting for 'GEMINI_READY'" in err["message"]
+
+
 def test_websocket_audio_format_validation(client: TestClient) -> None:
     with patch("app.websocket.LiveTranscriptionSession") as MockTxSession:
         instance = MockTxSession.return_value
@@ -58,13 +90,20 @@ def test_websocket_audio_format_validation(client: TestClient) -> None:
         instance.close = AsyncMock()
         instance.send_audio_chunk = AsyncMock()
 
-        async def empty_events():
-            if False:
-                yield {}
+        async def ready_events():
+            yield {"type": "ready"}
 
-        instance.receive_events = empty_events
+        instance.receive_events = ready_events
 
         with client.websocket_connect("/ws/test-ws-session") as ws:
+            # Read status frames until GEMINI_READY
+            msg1 = json.loads(ws.receive_text())
+            assert msg1["type"] == "status" and msg1["status"] == "GEMINI_CONNECTING"
+            msg2 = json.loads(ws.receive_text())
+            assert msg2["type"] == "status" and msg2["status"] == "GEMINI_READY"
+            msg3 = json.loads(ws.receive_text())
+            assert msg3["type"] == "ready"
+
             # Send invalid audio format (odd bytes)
             odd_bytes_b64 = base64.b64encode(b"\x00\x00\x01").decode("ascii")
             ws.send_text(json.dumps({"type": "audio", "data": odd_bytes_b64}))
@@ -82,22 +121,32 @@ def test_websocket_valid_audio_forwarded(client: TestClient) -> None:
         instance.close = AsyncMock()
         instance.send_audio_chunk = AsyncMock()
 
-        async def empty_events():
-            if False:
-                yield {}
+        async def ready_events():
+            yield {"type": "ready"}
 
-        instance.receive_events = empty_events
+        instance.receive_events = ready_events
 
         with client.websocket_connect("/ws/valid-audio-session") as ws:
+            # Read status frames until GEMINI_READY
+            msg1 = json.loads(ws.receive_text())
+            assert msg1["type"] == "status" and msg1["status"] == "GEMINI_CONNECTING"
+            msg2 = json.loads(ws.receive_text())
+            assert msg2["type"] == "status" and msg2["status"] == "GEMINI_READY"
+            msg3 = json.loads(ws.receive_text())
+            assert msg3["type"] == "ready"
+
             # Send 160 samples (320 bytes) of valid PCM16 silence
             silence_b64 = base64.b64encode(b"\x00\x00" * 160).decode("ascii")
             ws.send_text(json.dumps({"type": "audio", "data": silence_b64}))
 
-            import time
-            time.sleep(0.1)
+            # Read STREAMING status transition
+            streaming_msg = json.loads(ws.receive_text())
+            assert streaming_msg["type"] == "status"
+            assert streaming_msg["status"] == "STREAMING"
 
             # Stop session
             ws.send_text(json.dumps({"type": "stop"}))
+            import time
             time.sleep(0.05)
 
         instance.send_audio_chunk.assert_called_once()

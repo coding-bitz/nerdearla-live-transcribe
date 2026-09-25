@@ -3,6 +3,7 @@ import base64
 import json
 import logging
 import time
+from enum import Enum
 from typing import Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.ai.accessibility import enhance_for_accessibility
@@ -25,6 +26,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+class ConnectionState(str, Enum):
+    CONNECTING = "CONNECTING"
+    GEMINI_CONNECTING = "GEMINI_CONNECTING"
+    GEMINI_READY = "GEMINI_READY"
+    STREAMING = "STREAMING"
+    ERROR = "ERROR"
+    CLOSED = "CLOSED"
+
+
 class SessionConnectionHandler:
     """Coordinates real-time streaming between browser WebSocket and Gemini Live sessions."""
 
@@ -41,6 +51,7 @@ class SessionConnectionHandler:
         self.source_language = source_language
         self.enable_translation = enable_translation
         self.target_language = target_language
+        self.state = ConnectionState.CONNECTING
 
         self.tx_session: Optional[LiveTranscriptionSession] = None
         self.translate_session: Optional[LiveTranslationSession] = None
@@ -61,6 +72,15 @@ class SessionConnectionHandler:
         except Exception:
             pass
 
+    async def set_state(self, new_state: ConnectionState) -> None:
+        self.state = new_state
+        await self.send_json({
+            "type": "status",
+            "status": new_state.value,
+            "sessionId": self.session_id,
+            "timestamp": int(time.time() * 1000),
+        })
+
     async def initialize(self) -> None:
         await session_manager.get_or_create(
             self.session_id,
@@ -70,12 +90,14 @@ class SessionConnectionHandler:
         )
 
         self._running = True
+        await self.set_state(ConnectionState.GEMINI_CONNECTING)
 
         # Initialize live transcription session
         self.tx_session = LiveTranscriptionSession(language_codes=[self.source_language])
         try:
             await self.tx_session.start()
         except Exception as exc:
+            await self.set_state(ConnectionState.ERROR)
             await self.send_json(format_error_payload("AI_SERVICE_ERROR", f"Transcription service failed to connect: {exc}"))
             raise
 
@@ -106,6 +128,7 @@ class SessionConnectionHandler:
                     break
 
                 if event.get("type") == "ready":
+                    await self.set_state(ConnectionState.GEMINI_READY)
                     # Emit ready status to client
                     await self.send_json({
                         "type": "ready",
@@ -123,6 +146,7 @@ class SessionConnectionHandler:
                         self._recent_final_segments.append(text)
         except Exception as exc:
             logger.error(f"Error in transcription loop: {exc}")
+            await self.set_state(ConnectionState.ERROR)
             await self.send_json(format_error_payload("TRANSCRIPTION_ERROR", str(exc)))
 
     async def _listen_translation(self) -> None:
@@ -171,11 +195,24 @@ class SessionConnectionHandler:
                     await self.send_json(format_error_payload("CHAPTER_ERROR", str(exc)))
 
     async def handle_audio_bytes(self, pcm_bytes: bytes) -> None:
+        # Enforce strict handshake: audio cannot be streamed before Gemini Live setup_complete
+        if self.state not in (ConnectionState.GEMINI_READY, ConnectionState.STREAMING):
+            await self.send_json(
+                format_error_payload(
+                    "TRANSCRIPTION_ERROR",
+                    f"Cannot stream audio in state '{self.state.value}'. Waiting for 'GEMINI_READY'.",
+                )
+            )
+            return
+
         try:
             validate_pcm16_chunk(pcm_bytes)
         except InvalidAudioFormatError as err:
             await self.send_json(err.to_dict())
             return
+
+        if self.state == ConnectionState.GEMINI_READY:
+            await self.set_state(ConnectionState.STREAMING)
 
         self._latest_audio_metrics = compute_audio_metrics(pcm_bytes)
         await session_manager.increment_chunk_count(self.session_id)
@@ -270,6 +307,8 @@ class SessionConnectionHandler:
 
     async def cleanup(self) -> None:
         self._running = False
+        if self.state != ConnectionState.CLOSED:
+            await self.set_state(ConnectionState.CLOSED)
 
         for task in [self._tx_task, self._translate_task, self._chapter_task]:
             if task and not task.done():
