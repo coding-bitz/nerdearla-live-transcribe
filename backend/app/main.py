@@ -1,11 +1,14 @@
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from app.ai.accessibility import enhance_for_accessibility
 from app.ai.summary import generate_executive_summary
+from app.auth.dependencies import get_current_user
+from app.auth.provider import UserIdentity
+from app.auth.routes import router as auth_router
 from app.config import ALLOWED_MODELS, settings
 from app.redis import close_redis, ping_redis
 from app.sessions import session_manager
@@ -37,7 +40,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount WebSocket router
+# Mount Routers
+app.include_router(auth_router)
 app.include_router(ws_router)
 
 
@@ -90,7 +94,10 @@ async def readiness_check() -> JSONResponse:
 
 
 @app.get("/api/sessions/{session_id}")
-async def get_session(session_id: str) -> Dict[str, Any]:
+async def get_session(
+    session_id: str,
+    _user: UserIdentity = Depends(get_current_user),
+) -> Dict[str, Any]:
     session = await session_manager.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -98,7 +105,10 @@ async def get_session(session_id: str) -> Dict[str, Any]:
 
 
 @app.post("/api/sessions/{session_id}/summary")
-async def post_summary(session_id: str) -> Dict[str, Any]:
+async def post_summary(
+    session_id: str,
+    _user: UserIdentity = Depends(get_current_user),
+) -> Dict[str, Any]:
     session = await session_manager.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -119,7 +129,11 @@ async def post_summary(session_id: str) -> Dict[str, Any]:
 
 
 @app.post("/api/sessions/{session_id}/accessibility")
-async def post_accessibility(session_id: str, payload: AccessibilityRequest) -> Dict[str, Any]:
+async def post_accessibility(
+    session_id: str,
+    payload: AccessibilityRequest,
+    _user: UserIdentity = Depends(get_current_user),
+) -> Dict[str, Any]:
     try:
         result = await enhance_for_accessibility(
             text=payload.text,

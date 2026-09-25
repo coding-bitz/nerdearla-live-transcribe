@@ -39,15 +39,26 @@ def test_readiness_endpoint_healthy_redis(client: TestClient) -> None:
         assert data["models"]["utility"] == "gemini-3.5-flash-lite"
 
 
-def test_session_not_found(client: TestClient) -> None:
-    response = client.get("/api/sessions/nonexistent-session")
+@pytest.fixture
+def auth_headers():
+    from app.auth.jwt import create_access_token
+    from app.config import settings
+    original = settings.auth_jwt_secret
+    settings.auth_jwt_secret = "test-secret-that-is-at-least-32-characters-long!"
+    token = create_access_token("admin")
+    yield {"Authorization": f"Bearer {token}"}
+    settings.auth_jwt_secret = original
+
+
+def test_session_not_found(client: TestClient, auth_headers: dict) -> None:
+    response = client.get("/api/sessions/nonexistent-session", headers=auth_headers)
     assert response.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_session_summary_empty_transcript(client: TestClient) -> None:
+async def test_session_summary_empty_transcript(client: TestClient, auth_headers: dict) -> None:
     await session_manager.get_or_create("empty-sess")
-    response = client.post("/api/sessions/empty-sess/summary")
+    response = client.post("/api/sessions/empty-sess/summary", headers=auth_headers)
     assert response.status_code == 400
 
 
