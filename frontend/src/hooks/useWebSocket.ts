@@ -10,6 +10,8 @@ export type WsConnectionStatus =
   | "DISCONNECTED"
   | "CONNECTING"
   | "CONNECTED_BACKEND"
+  | "AUTHENTICATING"
+  | "AUTHENTICATED"
   | "GEMINI_CONNECTING"
   | "GEMINI_READY"
   | "STREAMING"
@@ -27,9 +29,14 @@ export interface SubtitleItem {
   timestamp: number;
 }
 
+export interface UseWebSocketProps {
+  token?: string | null;
+  onAuthExpired?: () => void;
+}
+
 const MAX_RECONNECT_ATTEMPTS = 5;
 
-export function useWebSocket() {
+export function useWebSocket({ token = null, onAuthExpired }: UseWebSocketProps = {}) {
   const [connectionStatus, setConnectionStatus] = useState<WsConnectionStatus>("DISCONNECTED");
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<ErrorPayload | null>(null);
@@ -49,6 +56,12 @@ export function useWebSocket() {
   const bufferQueueRef = useRef<Array<{ action: () => void; releaseAt: number }>>([]);
   const isPausedRef = useRef(isPaused);
   isPausedRef.current = isPaused;
+
+  const tokenRef = useRef<string | null>(token);
+  tokenRef.current = token;
+
+  const onAuthExpiredRef = useRef<(() => void) | undefined>(onAuthExpired);
+  onAuthExpiredRef.current = onAuthExpired;
 
   const manualDisconnectRef = useRef(false);
   const reconnectAttemptsRef = useRef(0);
@@ -133,6 +146,20 @@ export function useWebSocket() {
       ws.onopen = () => {
         reconnectAttemptsRef.current = 0;
         setConnectionStatus("CONNECTED_BACKEND");
+
+        // Immediately transmit authentication message
+        if (tokenRef.current) {
+          setConnectionStatus("AUTHENTICATING");
+          ws.send(JSON.stringify({ type: "auth", token: tokenRef.current }));
+        } else {
+          setConnectionStatus("ERROR");
+          setError({
+            type: "error",
+            code: "AUTH_REQUIRED",
+            message: "Authentication token missing. Please sign in again.",
+            retryable: false,
+          });
+        }
       };
 
       ws.onmessage = (event) => {
@@ -147,6 +174,8 @@ export function useWebSocket() {
             } else if (status === "CLOSED" || status === "ERROR") {
               setIsReady(false);
             }
+          } else if (payload.type === "auth_success") {
+            setConnectionStatus("AUTHENTICATED");
           } else if (payload.type === "ready") {
             setIsReady(true);
             setConnectionStatus("GEMINI_READY");
@@ -178,6 +207,17 @@ export function useWebSocket() {
           } else if (payload.type === "error") {
             setError(payload);
             setConnectionStatus("ERROR");
+
+            if (payload.code === "AUTH_EXPIRED" || payload.code === "AUTH_INVALID_TOKEN") {
+              manualDisconnectRef.current = true;
+              if (reconnectTimeoutRef.current) {
+                clearTimeout(reconnectTimeoutRef.current);
+                reconnectTimeoutRef.current = null;
+              }
+              if (onAuthExpiredRef.current) {
+                onAuthExpiredRef.current();
+              }
+            }
           }
         } catch {
           // Ignore non-json frames
@@ -197,7 +237,7 @@ export function useWebSocket() {
       ws.onclose = () => {
         setIsReady(false);
 
-        if (manualDisconnectRef.current) {
+        if (manualDisconnectRef.current || !tokenRef.current) {
           setConnectionStatus("DISCONNECTED");
           return;
         }
@@ -210,7 +250,7 @@ export function useWebSocket() {
           setConnectionStatus("CONNECTING");
 
           reconnectTimeoutRef.current = setTimeout(() => {
-            if (!manualDisconnectRef.current && activeSessionIdRef.current) {
+            if (!manualDisconnectRef.current && activeSessionIdRef.current && tokenRef.current) {
               internalConnect(activeSessionIdRef.current, activeOptionsRef.current);
             }
           }, delay);

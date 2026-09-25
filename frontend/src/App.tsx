@@ -12,7 +12,7 @@ import { useAudioCapture } from "./hooks/useAudioCapture";
 import { useWebSocket } from "./hooks/useWebSocket";
 
 function AuthenticatedLiveApp() {
-  const { username, logout } = useAuth();
+  const { username, token, logout } = useAuth();
 
   const [sessionId, setSessionId] = useState("nerdearla-main-room");
   const [sourceLanguage, setSourceLanguage] = useState("es-ES");
@@ -43,7 +43,7 @@ function AuthenticatedLiveApp() {
     requestLiveSummary,
     requestLiveAccessibility,
     clearError,
-  } = useWebSocket();
+  } = useWebSocket({ token, onAuthExpired: logout });
 
   const {
     isRecording,

@@ -39,6 +39,10 @@ export const AudioCapture: React.FC<AudioCaptureProps> = ({
         return <span className="badge badge-warning">Connecting to Backend...</span>;
       case "CONNECTED_BACKEND":
         return <span className="badge badge-info">Connected to Backend</span>;
+      case "AUTHENTICATING":
+        return <span className="badge badge-warning">Authenticating WebSocket...</span>;
+      case "AUTHENTICATED":
+        return <span className="badge badge-info">WebSocket Authenticated</span>;
       case "GEMINI_CONNECTING":
         return <span className="badge badge-warning">Connecting to Gemini...</span>;
       case "GEMINI_READY":
